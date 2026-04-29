@@ -18,7 +18,7 @@
  * mail: epistemereader@gmail.com
  */
 // MainViewModel.kt
-@file:Suppress("DEPRECATION")
+@file:Suppress("DEPRECATION", "ANNOTATION_WILL_BE_APPLIED_ALSO_TO_PROPERTY_OR_FIELD")
 
 package com.aryan.reader
 
@@ -31,8 +31,14 @@ import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import com.aryan.reader.tts.TtsController
+import com.aryan.reader.tts.TtsPlaybackManager
+import com.aryan.reader.paginatedreader.LocatorConverter
+import kotlinx.serialization.protobuf.ProtoBuf
+import com.aryan.reader.paginatedreader.semanticBlockModule
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import androidx.annotation.StringRes
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.edit
 import androidx.core.graphics.createBitmap
@@ -181,20 +187,21 @@ private data class CachedSpeechBubble(
     val maskBitmap: Bitmap?
 )
 
-enum class AddBooksSource(val displayName: String) {
-    UNSHELVED("Unshelved"), ALL_BOOKS("All Books")
+enum class AddBooksSource(@StringRes val labelRes: Int) {
+    UNSHELVED(R.string.add_books_source_unshelved),
+    ALL_BOOKS(R.string.add_books_source_all_books)
 }
 
-enum class AppThemeMode(val displayName: String) {
-    SYSTEM("System"),
-    LIGHT("Light"),
-    DARK("Dark")
+enum class AppThemeMode(@StringRes val labelRes: Int) {
+    SYSTEM(R.string.app_theme_mode_system),
+    LIGHT(R.string.app_theme_mode_light),
+    DARK(R.string.app_theme_mode_dark)
 }
 
-enum class AppContrastOption(val displayName: String, val value: Double) {
-    STANDARD("Standard", 0.0),
-    MEDIUM("Medium", 0.5),
-    HIGH("High", 1.0)
+enum class AppContrastOption(@StringRes val labelRes: Int, val value: Double) {
+    STANDARD(R.string.app_contrast_standard, 0.0),
+    MEDIUM(R.string.app_contrast_medium, 0.5),
+    HIGH(R.string.app_contrast_high, 1.0)
 }
 
 data class CustomAppTheme(
@@ -240,18 +247,21 @@ data class Shelf(
     val childShelfCount: Int get() = childShelfIds.size
 }
 
-enum class SortOrder(val displayName: String) {
-    RECENT("Recent"),
-    TITLE_ASC("Title A-Z"),
-    AUTHOR_ASC("Author A-Z"),
-    PERCENT_ASC("Percent complete 0-100"),
-    PERCENT_DESC("Percent complete 100-0"),
-    SIZE_ASC("Size (Smallest)"),
-    SIZE_DESC("Size (Biggest)")
+enum class SortOrder(@StringRes val labelRes: Int) {
+    RECENT(R.string.sort_recent),
+    TITLE_ASC(R.string.sort_title_az),
+    AUTHOR_ASC(R.string.sort_author_az),
+    PERCENT_ASC(R.string.sort_percent_asc),
+    PERCENT_DESC(R.string.sort_percent_desc),
+    SIZE_ASC(R.string.sort_size_smallest),
+    SIZE_DESC(R.string.sort_size_biggest)
 }
 
-enum class ReadStatusFilter(val displayName: String) {
-    ALL("All"), UNREAD("Unread"), IN_PROGRESS("In Progress"), COMPLETED("Completed")
+enum class ReadStatusFilter(@StringRes val labelRes: Int) {
+    ALL(R.string.read_status_all),
+    UNREAD(R.string.read_status_unread),
+    IN_PROGRESS(R.string.read_status_in_progress),
+    COMPLETED(R.string.read_status_completed)
 }
 
 data class LibraryFilters(
@@ -651,6 +661,12 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     )
 
     val proUpgradeState = billingClientWrapper.proUpgradeState
+
+    val ttsController by lazy { TtsController(appContext).apply { connect() } }
+
+    private var backgroundTtsBook: EpubBook? = null
+    private var backgroundTtsBookId: String? = null
+    private var backgroundTtsCoverPath: String? = null
 
     private val _internalState = MutableStateFlow(
         ReaderScreenState(
@@ -1264,7 +1280,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
 
-                    val result = fontsRepository.importFont(android.net.Uri.fromFile(tempFile))
+                    val result = fontsRepository.importFont(Uri.fromFile(tempFile))
                     result.onSuccess { font ->
                         if (uiState.value.isSyncEnabled) {
                             uploadNewFont(font)
@@ -1512,6 +1528,37 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         Timber.d("ViewModel instance created.")
         WorkManager.getInstance(application).cancelUniqueWork(FolderSyncWorker.WORK_NAME)
+
+        // --- ADD THIS BLOCK ---
+        val locatorConverter = LocatorConverter(
+            bookCacheDao,
+            ProtoBuf { serializersModule = semanticBlockModule },
+            appContext
+        )
+
+        viewModelScope.launch {
+            var wasSessionFinished = false
+            ttsController.ttsState.collect { state ->
+                val isPlaying = state.isPlaying
+                val sessionFinished = state.sessionFinished
+                val isReaderSource = state.playbackSource == "READER"
+
+                if (isReaderSource) {
+                    if (sessionFinished && !wasSessionFinished) {
+                        if (_internalState.value.selectedEpubBook == null) {
+                            Timber.tag("TTS_BG_ADVANCE").i("Reader is closed. Handling auto-advance in background.")
+                            advanceTtsChapterInBackground(state, locatorConverter)
+                        }
+                    }
+                    if (state.sessionEndedByStop) {
+                        backgroundTtsBook = null
+                        backgroundTtsBookId = null
+                        backgroundTtsCoverPath = null
+                    }
+                }
+                wasSessionFinished = sessionFinished
+            }
+        }
         viewModelScope.launch {
             recentFilesRepository.migrateLegacyShelvesToRoom()
             if (!prefs.getBoolean(KEY_DEFAULT_TAGS_SEEDED, false)) {
@@ -2531,6 +2578,20 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         val uriString = _internalState.value.selectedPdfUri?.toString()
             ?: _internalState.value.selectedEpubUri?.toString()
 
+        val ttsState = ttsController.ttsState.value
+        val isTtsActive = ttsState.playbackSource == "READER" &&
+                (ttsState.isPlaying || ttsState.isLoading || ttsState.sessionFinished || ttsState.currentText != null)
+
+        if (isTtsActive && _internalState.value.selectedEpubBook != null) {
+            backgroundTtsBook = _internalState.value.selectedEpubBook
+            backgroundTtsBookId = _internalState.value.selectedBookId
+            backgroundTtsCoverPath = uiState.value.recentFiles.find { it.bookId == backgroundTtsBookId }?.coverImagePath
+        } else if (!isTtsActive) {
+            backgroundTtsBook = null
+            backgroundTtsBookId = null
+            backgroundTtsCoverPath = null
+        }
+
         _internalState.update {
             it.copy(
                 selectedPdfUri = null,
@@ -2595,6 +2656,68 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                             fcmToken = token
                         )
                     }
+                }
+            }
+        }
+    }
+
+    private fun advanceTtsChapterInBackground(state: TtsPlaybackManager.TtsState, locatorConverter: LocatorConverter) {
+        val currentChapterIndex = state.chapterIndex ?: return
+        val book = backgroundTtsBook ?: return
+        val bookId = backgroundTtsBookId ?: return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            var nextIdx = currentChapterIndex + 1
+            val totalChapters = book.chapters.size
+            var foundContent = false
+
+            while (nextIdx < totalChapters) {
+                Timber.tag("TTS_BG_ADVANCE").d("Trying chapter $nextIdx natively.")
+                val nativeChunks = locatorConverter.getTtsChunksForChapter(book, nextIdx)
+
+                if (!nativeChunks.isNullOrEmpty()) {
+                    val token = getAuthToken()
+                    val mode = try {
+                        TtsPlaybackManager.TtsMode.valueOf(state.ttsMode)
+                    } catch(e: Exception) {
+                        TtsPlaybackManager.TtsMode.CLOUD
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        ttsController.start(
+                            chunks = nativeChunks,
+                            bookTitle = book.title,
+                            chapterTitle = book.chapters.getOrNull(nextIdx)?.title,
+                            coverImageUri = backgroundTtsCoverPath?.let { Uri.fromFile(File(it)).toString() },
+                            chapterIndex = nextIdx,
+                            ttsMode = mode,
+                            playbackSource = "READER",
+                            authToken = token
+                        )
+                    }
+                    foundContent = true
+
+                    // Save reading position locally
+                    val cfi = nativeChunks.firstOrNull()?.sourceCfi
+                    if (cfi != null) {
+                        val locator = locatorConverter.getLocatorFromCfi(book, nextIdx, cfi)
+                        if (locator != null) {
+                            recentFilesRepository.getFileByBookId(bookId)?.uriString?.let { uriString ->
+                                recentFilesRepository.updateEpubReadingPosition(uriString, locator, cfi, 0f)
+                            }
+                        }
+                    }
+                    break
+                } else {
+                    Timber.tag("TTS_BG_ADVANCE").d("Chapter $nextIdx is empty natively. Skipping to next.")
+                    nextIdx++
+                }
+            }
+
+            if (!foundContent) {
+                Timber.tag("TTS_BG_ADVANCE").d("Reached end of book or no content found.")
+                withContext(Dispatchers.Main) {
+                    ttsController.stop()
                 }
             }
         }
@@ -5407,6 +5530,8 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         speechBubbleDetector = null
         speechBubbleCache.clear()
         speechBubbleDetectionJobs.clear()
+
+        ttsController.release()
 
         Timber.d("ViewModel instance cleared (onCleared).")
     }

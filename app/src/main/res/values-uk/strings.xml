@@ -67,7 +67,7 @@
     <string name="not_available_locally">Немає на пристрої</string>
     <string name="drawer_sign_in">Sign in with Google</string>
     <string name="drawer_by_signing_in">Під час входу</string>
-    <string name="drawer_pro_unlocked">Episteme Pro</string>
+    <string name="drawer_pro_unlocked">Pro</string>
     <string name="drawer_upgrade_pro">Обновити до Episteme Pro</string>
     <string name="drawer_sync_library">Синхронізувати бібліотеку</string>
     <string name="drawer_backup_local_folders">Синхронізація локальних папок</string>

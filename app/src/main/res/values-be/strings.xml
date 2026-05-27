@@ -11,11 +11,11 @@
     <string name="action_back">Назад</string>
     <string name="action_search">Пошук</string>
     <string name="action_clear">Ачысціць</string>
-    <string name="action_apply">Ужыць</string>
+    <string name="action_apply">Прымяніць</string>
     <string name="action_enable">Уключыць</string>
     <string name="error_message_format">Памылка: %1$s</string>
     <string name="action_go_back">Вярнуцца</string>
-    <string name="tab_free">Вольная</string>
+    <string name="tab_free">Свабодная</string>
     <string name="active_tabs">Актыўныя ўкладкі</string>
     <string name="close_tab">Закрыць укладку</string>
     <string name="close_all_tabs">Закрыць усе ўкладкі</string>
@@ -26,7 +26,7 @@
     <string name="legal_privacy_policy">Палітыка прыватнасці</string>
     <string name="legal_licenses">Ліцэнзіі</string>
     <string name="items_selected_count">Выбрана %1$d</string>
-    <string name="clear_selection">Ачысціць выбар</string>
+    <string name="clear_selection">Зняць вылучанае</string>
     <string name="pin_unpin">Замацаваць/Адмацаваць</string>
     <string name="info">Звесткі</string>
     <string name="select_all">Выбраць усё</string>
@@ -1104,4 +1104,5 @@
     <string name="label_replying_to">У адказ %1$s</string>
     <string name="options_use_pdf_filename_display_name">Выкарыстоўваць назвы файлаў PDF</string>
     <string name="tool_brightness">Яркасць</string>
+    <string name="pdf_tabs_show_top_app_bar_tabs">Паказваць укладкі на верхняй панэлі</string>
 </resources>
